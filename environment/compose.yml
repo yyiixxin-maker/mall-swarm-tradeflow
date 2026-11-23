@@ -1,0 +1,138 @@
+name: tradeflow-local
+
+services:
+  mysql:
+    image: ${TRADEFLOW_MYSQL_IMAGE:-mysql:8.4}
+    environment:
+      MYSQL_DATABASE: mall
+      MYSQL_USER: mall
+      MYSQL_PASSWORD: ${TRADEFLOW_MYSQL_PASSWORD:?Run local.py prepare}
+      MYSQL_ROOT_PASSWORD: ${TRADEFLOW_MYSQL_ROOT_PASSWORD:?Run local.py prepare}
+    command: [--character-set-server=utf8mb4, --collation-server=utf8mb4_unicode_ci]
+    ports: ["127.0.0.1:13306:3306"]
+    volumes:
+      - mysql-data:/var/lib/mysql
+      - ./.runtime/mysql-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: [CMD-SHELL, 'MYSQL_PWD="$$MYSQL_PASSWORD" mysql -umall -h127.0.0.1 -e "SELECT 1" mall >/dev/null 2>&1']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    mem_limit: 1g
+
+  redis:
+    image: redis:7
+    environment:
+      REDIS_PASSWORD: ${TRADEFLOW_REDIS_PASSWORD:?Run local.py prepare}
+    command: [sh, -c, 'exec redis-server --appendonly yes --requirepass "$$REDIS_PASSWORD"']
+    ports: ["127.0.0.1:16379:6379"]
+    volumes: [redis-data:/data]
+    healthcheck:
+      test: [CMD-SHELL, 'REDISCLI_AUTH="$$REDIS_PASSWORD" redis-cli ping | grep -q PONG']
+      interval: 10s
+      timeout: 5s
+      retries: 20
+    mem_limit: 128m
+
+  rabbitmq:
+    image: rabbitmq:3.9.11-management
+    environment:
+      RABBITMQ_DEFAULT_USER: bootstrap
+      RABBITMQ_DEFAULT_PASS: ${TRADEFLOW_RABBIT_ADMIN_PASSWORD:?Run local.py prepare}
+      RABBITMQ_DEFAULT_VHOST: /mall
+    ports:
+      - "127.0.0.1:5673:5672"
+      - "127.0.0.1:15673:15672"
+    volumes: [rabbitmq-data:/var/lib/rabbitmq]
+    healthcheck:
+      test: [CMD, rabbitmq-diagnostics, -q, ping]
+      interval: 10s
+      timeout: 10s
+      retries: 30
+    mem_limit: 512m
+
+  nacos:
+    image: nacos/nacos-server:v3.0.3
+    environment:
+      MODE: standalone
+      NACOS_AUTH_ENABLE: "true"
+      NACOS_AUTH_TOKEN: ${TRADEFLOW_NACOS_TOKEN:?Run local.py prepare}
+      NACOS_AUTH_IDENTITY_KEY: tradeflowIdentity
+      NACOS_AUTH_IDENTITY_VALUE: ${TRADEFLOW_NACOS_IDENTITY:?Run local.py prepare}
+      JVM_XMS: 256m
+      JVM_XMX: 512m
+      JVM_XMN: 128m
+    ports:
+      - "127.0.0.1:18848:8848"
+      - "127.0.0.1:19848:9848"
+      - "127.0.0.1:18880:8080"
+    volumes:
+      - nacos-data:/home/nacos/data
+      - nacos-logs:/home/nacos/logs
+    healthcheck:
+      test: [CMD-SHELL, 'curl -fsS http://127.0.0.1:8080/v3/console/health/readiness >/dev/null']
+      interval: 10s
+      timeout: 5s
+      retries: 40
+      start_period: 30s
+    mem_limit: 1g
+
+  mongo:
+    image: mongo:4
+    environment:
+      MONGO_INITDB_ROOT_USERNAME: bootstrap
+      MONGO_INITDB_ROOT_PASSWORD: ${TRADEFLOW_MONGO_ROOT_PASSWORD:?Run local.py prepare}
+    ports: ["127.0.0.1:27018:27017"]
+    volumes:
+      - mongo-data:/data/db
+      - ./.runtime/mongo-init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: [CMD-SHELL, 'mongo --quiet --eval "quit(db.runCommand({ping:1}).ok ? 0 : 1)"']
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    mem_limit: 512m
+
+  elasticsearch:
+    build: ./elasticsearch
+    image: tradeflow-local/elasticsearch-ik:8.18.1
+    environment:
+      discovery.type: single-node
+      xpack.security.enabled: "false"
+      ES_JAVA_OPTS: -Xms512m -Xmx512m
+    ports: ["127.0.0.1:19200:9200"]
+    volumes: [elasticsearch-data:/usr/share/elasticsearch/data]
+    healthcheck:
+      test: [CMD-SHELL, 'curl -fsS "http://127.0.0.1:9200/_cluster/health?wait_for_status=yellow&timeout=5s" >/dev/null']
+      interval: 10s
+      timeout: 10s
+      retries: 40
+    mem_limit: 1536m
+
+  minio:
+    build: ./minio
+    image: tradeflow-local/minio:RELEASE.2025-04-22T22-12-26Z
+    environment:
+      MINIO_ROOT_USER: tradeflow
+      MINIO_ROOT_PASSWORD: ${TRADEFLOW_MINIO_PASSWORD:?Run local.py prepare}
+    command: [server, /data, --console-address, ":9001"]
+    ports:
+      - "127.0.0.1:19000:9000"
+      - "127.0.0.1:19001:9001"
+    volumes: [minio-data:/data]
+    healthcheck:
+      test: [CMD, curl, -fsS, http://127.0.0.1:9000/minio/health/live]
+      interval: 10s
+      timeout: 5s
+      retries: 30
+    mem_limit: 512m
+
+volumes:
+  mysql-data:
+  redis-data:
+  rabbitmq-data:
+  nacos-data:
+  nacos-logs:
+  mongo-data:
+  elasticsearch-data:
+  minio-data:
